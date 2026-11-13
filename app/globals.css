@@ -1,0 +1,201 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Premium dark system: layered true-grey surfaces, one violet accent,
+   muted gold reserved for Almighty brand moments, a faint blueprint
+   grid for depth. */
+:root {
+  color-scheme: dark;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  background-color: #0a0c10;
+  background-image:
+    radial-gradient(1100px 520px at 72% -12%, rgba(139, 124, 255, 0.13), transparent 62%),
+    radial-gradient(820px 480px at -8% 108%, rgba(192, 154, 62, 0.05), transparent 60%),
+    radial-gradient(640px 420px at 108% 88%, rgba(139, 124, 255, 0.05), transparent 60%),
+    linear-gradient(rgba(255, 255, 255, 0.022) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.022) 1px, transparent 1px);
+  background-size:
+    auto, auto, auto, 56px 56px, 56px 56px;
+  background-attachment: fixed;
+  color: #e9ecf3;
+}
+
+/* Almighty wordmark — muted gold gradient, brand moments only. */
+.wordmark {
+  background: linear-gradient(100deg, #e6c887 0%, #d4af5f 45%, #c09a3e 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+::selection {
+  background: rgba(139, 124, 255, 0.35);
+  color: #fff;
+}
+
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: #232a3a;
+  border-radius: 4px;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: #2f3850;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* ---- motion ---- */
+@keyframes fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes shimmer {
+  0% {
+    background-position: -400px 0;
+  }
+  100% {
+    background-position: 400px 0;
+  }
+}
+
+@keyframes pulse-dot {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(251, 191, 36, 0.55);
+  }
+  50% {
+    box-shadow: 0 0 0 5px rgba(251, 191, 36, 0);
+  }
+}
+
+@keyframes pulse-dot-green {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.55);
+  }
+  50% {
+    box-shadow: 0 0 0 5px rgba(52, 211, 153, 0);
+  }
+}
+
+@keyframes caret-blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0;
+  }
+}
+
+@keyframes spin-slow {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes orb-breathe {
+  0%,
+  100% {
+    box-shadow:
+      0 0 0 0 rgba(139, 124, 255, 0.22),
+      0 0 32px -6px rgba(139, 124, 255, 0.35);
+  }
+  50% {
+    box-shadow:
+      0 0 0 6px rgba(139, 124, 255, 0.04),
+      0 0 48px -4px rgba(192, 154, 62, 0.35);
+  }
+}
+
+@keyframes flow-dash {
+  to {
+    stroke-dashoffset: -16;
+  }
+}
+
+.animate-fade-up {
+  animation: fade-up 0.45s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.animate-shimmer {
+  background: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0.04) 25%,
+    rgba(255, 255, 255, 0.1) 50%,
+    rgba(255, 255, 255, 0.04) 75%
+  );
+  background-size: 800px 100%;
+  animation: shimmer 1.6s linear infinite;
+}
+
+.dot-running {
+  animation: pulse-dot 1.4s ease-in-out infinite;
+}
+
+.dot-live {
+  animation: pulse-dot-green 1.6s ease-in-out infinite;
+}
+
+.caret-blink {
+  animation: caret-blink 0.9s step-end infinite;
+}
+
+.orb-spin {
+  animation: spin-slow 24s linear infinite;
+}
+
+.orb-breathe {
+  animation: orb-breathe 5s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .orb-spin,
+  .orb-breathe,
+  .dot-running,
+  .dot-live {
+    animation: none;
+  }
+}
+
+/* ---- React Flow on the dark canvas ---- */
+.react-flow__controls-button {
+  background: rgba(16, 20, 27, 0.9) !important;
+  border-color: rgba(255, 255, 255, 0.09) !important;
+  fill: #c3c9d6 !important;
+  backdrop-filter: blur(8px);
+}
+
+.react-flow__controls-button:hover {
+  background: #171c29 !important;
+}
+
+.react-flow__node {
+  cursor: pointer;
+}
+
+.react-flow__edge.animated path {
+  animation: flow-dash 1s linear infinite;
+}
