@@ -1,29 +1,102 @@
 /**
  * Typed API client for the Almighty backend.
- * All calls go to NEXT_PUBLIC_API_URL (default http://localhost:8000).
+ * All calls are same-origin — Next.js rewrites /api/* to the backend
+ * (see next.config.js), so the browser talks to the frontend's own
+ * origin and the HttpOnly refresh cookie is first-party.
  * Every function throws an Error with a readable message on failure so the
  * UI can show an error banner instead of crashing.
+ *
+ * Auth (mirrors Elric's frontend): the access token lives in memory
+ * only — never localStorage — and is sent as Authorization: Bearer on
+ * every call. On a 401 the client refreshes via the HttpOnly cookie
+ * (POST /api/auth/refresh) and retries once; when there is no session
+ * it sends the user to /login.
  */
 import type {
+  AuthResult,
+  AuthUser,
   ChatResponse,
   Conversation,
   DocumentInfo,
   HistoryMessage,
+  IngestJob,
   IngestResponse,
 } from "@/types";
 import { deriveRunStats, normalizeTrace } from "@/services/trace";
 
-const API_URL =
-  process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+// Same-origin: Next.js rewrites /api/* to the backend (next.config.js).
+const API_BASE = "";
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+// -- auth state (in memory only, never localStorage) -----------------------
+
+let accessToken: string | null = null;
+let refreshPromise: Promise<boolean> | null = null;
+
+/** Exchange the HttpOnly refresh cookie for a fresh access token. */
+async function refreshAccessToken(): Promise<boolean> {
+  if (!refreshPromise) {
+    refreshPromise = (async () => {
+      try {
+        const res = await fetch(`${API_BASE}/api/auth/refresh`, {
+          method: "POST",
+          credentials: "include",
+        });
+        if (!res.ok) return false;
+        const data = (await res.json()) as AuthResult;
+        accessToken = data.access_token;
+        return true;
+      } catch {
+        return false;
+      }
+    })().finally(() => {
+      refreshPromise = null;
+    });
+  }
+  return refreshPromise;
+}
+
+function redirectToLogin() {
+  if (typeof window === "undefined") return;
+  const path = window.location.pathname;
+  if (path !== "/login" && path !== "/register") {
+    window.location.href = "/login";
+  }
+}
+
+/**
+ * Single fetch wrapper: every backend call goes through here so errors
+ * surface with the backend's own message instead of a bare status code.
+ * Exported so services/runs.ts uses the same auth-aware path.
+ */
+export async function request<T>(
+  path: string,
+  init?: RequestInit,
+  retry = true,
+): Promise<T> {
+  const headers = new Headers(init?.headers);
+  if (accessToken) {
+    headers.set("Authorization", `Bearer ${accessToken}`);
+  }
   let res: Response;
   try {
-    res = await fetch(`${API_URL}${path}`, init);
+    res = await fetch(`${API_BASE}${path}`, {
+      ...init,
+      headers,
+      credentials: "include",
+    });
   } catch {
-    throw new Error(
-      `Cannot reach the API at ${API_URL}. Is the backend running?`,
-    );
+    throw new Error("Cannot reach the API. Is the backend running?");
+  }
+  // Login/register failures are the user's own wrong credentials — do
+  // not burn a refresh attempt (or bounce to /login) on them.
+  const isAuthCall =
+    path.startsWith("/api/auth/login") ||
+    path.startsWith("/api/auth/register");
+  if (res.status === 401 && retry && !isAuthCall) {
+    if (await refreshAccessToken()) {
+      return request<T>(path, init, false);
+    }
+    redirectToLogin();
   }
   if (!res.ok) {
     let detail = res.statusText;
@@ -36,6 +109,67 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     throw new Error(`API error ${res.status}: ${detail}`);
   }
   return (await res.json()) as T;
+}
+
+// -- auth ------------------------------------------------------------------
+
+export async function registerUser(
+  email: string,
+  password: string,
+): Promise<AuthResult> {
+  const data = await request<AuthResult>("/api/auth/register", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, password }),
+  });
+  accessToken = data.access_token;
+  return data;
+}
+
+export async function loginUser(
+  email: string,
+  password: string,
+): Promise<AuthResult> {
+  const data = await request<AuthResult>("/api/auth/login", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, password }),
+  });
+  accessToken = data.access_token;
+  return data;
+}
+
+export async function logoutUser(): Promise<void> {
+  try {
+    await request("/api/auth/logout", { method: "POST" });
+  } finally {
+    accessToken = null;
+  }
+}
+
+export async function fetchMe(): Promise<AuthUser> {
+  const data = await request<{ user: AuthUser }>("/api/auth/me");
+  return data.user;
+}
+
+export async function changePassword(
+  currentPassword: string,
+  newPassword: string,
+): Promise<void> {
+  await request("/api/auth/change-password", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      current_password: currentPassword,
+      new_password: newPassword,
+    }),
+  });
+}
+
+/** True when a session exists (in-memory token, or a refresh cookie). */
+export async function ensureSession(): Promise<boolean> {
+  if (accessToken) return true;
+  return refreshAccessToken();
 }
 
 export async function health(): Promise<{ status: string; llm_provider?: string }> {
@@ -89,20 +223,32 @@ export async function chatStream(
   question: string,
   handlers: StreamHandlers,
   history?: HistoryMessage[],
+  retry = true,
 ): Promise<ChatResponse> {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
+  if (accessToken) {
+    headers.Authorization = `Bearer ${accessToken}`;
+  }
   let res: Response;
   try {
-    res = await fetch(`${API_URL}/api/chat/stream`, {
+    res = await fetch(`${API_BASE}/api/chat/stream`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers,
+      credentials: "include",
       body: JSON.stringify(
         history?.length ? { question, history } : { question },
       ),
     });
   } catch {
-    throw new Error(
-      `Cannot reach the API at ${API_URL}. Is the backend running?`,
-    );
+    throw new Error("Cannot reach the API. Is the backend running?");
+  }
+  if (res.status === 401 && retry) {
+    if (await refreshAccessToken()) {
+      return chatStream(question, handlers, history, false);
+    }
+    redirectToLogin();
   }
   if (!res.ok || !res.body) {
     let detail = res.statusText;
@@ -181,6 +327,8 @@ export async function chatStream(
 export async function ingestFile(file: File): Promise<IngestResponse> {
   const form = new FormData();
   form.append("file", file);
+  // 202 straight away — the file is queued, not ingested yet. Poll
+  // getJob(job_id) for the result (see hooks/useDocuments).
   return request<IngestResponse>("/api/ingest", {
     method: "POST",
     body: form,
@@ -193,6 +341,15 @@ export async function ingestUrl(url: string): Promise<IngestResponse> {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ url }),
   });
+}
+
+export async function getJob(jobId: string): Promise<IngestJob> {
+  return request<IngestJob>(`/api/jobs/${encodeURIComponent(jobId)}`);
+}
+
+export async function listJobs(): Promise<IngestJob[]> {
+  const data = await request<IngestJob[] | { jobs: IngestJob[] }>("/api/jobs");
+  return Array.isArray(data) ? data : data.jobs;
 }
 
 export async function listDocuments(): Promise<DocumentInfo[]> {

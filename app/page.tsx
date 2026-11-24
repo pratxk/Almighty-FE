@@ -1,12 +1,13 @@
 "use client";
 
 import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useRouter } from "next/navigation";
 import ChatMessage, { AgentOrb } from "@/components/ChatMessage";
 import DocumentPanel from "@/components/DocumentPanel";
 import InspectorPanel from "@/components/InspectorPanel";
 import { useChat } from "@/hooks/useChat";
 import { useDocuments } from "@/hooks/useDocuments";
-import { health } from "@/services/api";
+import { ensureSession, fetchMe, health, logoutUser } from "@/services/api";
 
 const EXAMPLE_QUESTIONS = [
   {
@@ -27,9 +28,6 @@ const EXAMPLE_QUESTIONS = [
   },
 ];
 
-const API_URL =
-  process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
-
 const PROVIDER_LABEL: Record<string, string> = {
   gemini: "Gemini",
   ollama: "Ollama",
@@ -42,16 +40,47 @@ const PROVIDER_LABEL: Record<string, string> = {
  * useChat, sidebar state in useDocuments, rendering in components/.
  */
 export default function Home() {
+  const router = useRouter();
   const { messages, loading, error, sendMessage, clearError, clearMessages } =
     useChat();
   const documents = useDocuments();
   const [input, setInput] = useState("");
   const [apiDown, setApiDown] = useState(false);
   const [provider, setProvider] = useState("gemini");
+  const [userEmail, setUserEmail] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
+
+  // Session guard: no session means /login. The API client also
+  // redirects on 401, but this keeps the app from flashing for a
+  // logged-out user and shows who is signed in.
+  useEffect(() => {
+    let cancelled = false;
+    ensureSession().then(async (ok) => {
+      if (cancelled) return;
+      if (!ok) {
+        router.push("/login");
+        return;
+      }
+      try {
+        const me = await fetchMe();
+        if (!cancelled) setUserEmail(me.email);
+      } catch {
+        // /me failing means the session is gone; the next API call
+        // redirects to /login on its own 401.
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [router]);
+
+  const handleLogout = async () => {
+    await logoutUser();
+    router.push("/login");
+  };
 
   // Backend availability probe — drives the status pill, not the chat.
   useEffect(() => {
@@ -113,6 +142,7 @@ export default function Home() {
       uploading={documents.uploading}
       error={documents.error}
       lastIngest={documents.lastIngest}
+      activeJob={documents.activeJob}
       onIngestFile={documents.ingestFile}
       onIngestUrl={documents.ingestUrl}
       onDeleteDocument={documents.deleteDocument}
@@ -134,7 +164,10 @@ export default function Home() {
             ☰
           </button>
           <AgentOrb />
-          <div className="min-w-0">
+          {/* Wordmark hidden on narrow phones (<480px): the eye orb
+              carries the brand there, and the full title truncated
+              to "Almig…" in the crowded header. */}
+          <div className="hidden min-w-0 min-[480px]:block">
             <h1 className="wordmark truncate font-display text-[17px] font-bold leading-tight tracking-tight">
               Almighty
             </h1>
@@ -157,7 +190,7 @@ export default function Home() {
                 ? "border-danger/40 bg-danger/10 text-danger"
                 : "border-success/40 bg-success/10 text-success"
             }`}
-            title={`Backend: ${API_URL}`}
+            title="Backend: same-origin proxy (Next.js rewrites /api/* to the backend)"
           >
             <span
               className={`h-1.5 w-1.5 rounded-full ${
@@ -183,6 +216,21 @@ export default function Home() {
               New chat
             </button>
           )}
+          {userEmail && (
+            <span
+              className="hidden max-w-[200px] truncate font-mono text-[11px] text-mist-500 lg:block"
+              title={userEmail}
+            >
+              {userEmail}
+            </span>
+          )}
+          <button
+            type="button"
+            onClick={() => void handleLogout()}
+            className="rounded-lg border border-white/10 px-3 py-1.5 text-xs font-medium text-mist-300 transition hover:bg-white/[0.05]"
+          >
+            Log out
+          </button>
         </div>
       </header>
 
@@ -191,7 +239,7 @@ export default function Home() {
           role="alert"
           className="shrink-0 border-b border-danger/40 bg-danger/10 px-4 py-2.5 text-sm text-danger"
         >
-          Cannot reach the API at {API_URL}. Start the backend, then refresh —
+          Cannot reach the API. Start the backend, then refresh —
           chat and document actions will fail until it is back.
         </div>
       )}

@@ -126,10 +126,17 @@ export interface DocumentInfo {
   tokens?: number;
 }
 
-/** Stats returned by the ingest endpoints. */
+/** The 202 acknowledgement an ingest endpoint returns straight away.
+ * The slow work happens in the background — poll the job for the
+ * result (see IngestJob). */
 export interface IngestResponse {
-  document_id?: string;
+  job_id: string;
+  status: IngestJobStatus;
   title?: string;
+  kind?: "file" | "url";
+  /** Stats of the finished ingest, filled in by the hook from the
+   * completed job (kept for the "Last ingest" panel). */
+  document_id?: string;
   chunks_created?: number;
   total_characters?: number;
   total_tokens?: number;
@@ -138,12 +145,49 @@ export interface IngestResponse {
   message?: string;
 }
 
+/** One background ingest job, from GET /api/jobs/{job_id}. */
+export type IngestJobStatus = "queued" | "processing" | "done" | "failed";
+
+export interface IngestJob {
+  job_id: string;
+  kind: "file" | "url";
+  title: string;
+  source: string;
+  status: IngestJobStatus;
+  /** 0–100, from the pipeline stages (chunked 20, embedded 70, stored 95). */
+  progress: number;
+  total_chunks: number;
+  done_chunks: number;
+  /** On done: {document_id, chars, chunks, approx_tokens, ...}. */
+  stats?: Record<string, unknown> | null;
+  /** On failed: what went wrong. */
+  error?: string | null;
+  created_at?: string;
+  updated_at?: string;
+}
+
 /** One past conversation, from GET /api/conversations. */
 export interface Conversation {
   id: string;
   title: string;
   created_at?: string;
   message_count?: number;
+}
+
+/** The signed-in user, from GET /api/auth/me. */
+export interface AuthUser {
+  id: string;
+  email: string;
+  created_at?: string;
+}
+
+/** What POST /api/auth/register and /api/auth/login return. The access
+ * token lives in memory only (see services/api.ts); the refresh token
+ * rides in an HttpOnly cookie the browser manages. */
+export interface AuthResult {
+  access_token: string;
+  token_type: string;
+  user: AuthUser;
 }
 
 /** A chat message shown in the UI. */
