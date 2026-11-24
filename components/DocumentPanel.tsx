@@ -1,7 +1,12 @@
 "use client";
 
 import { useRef, useState, type FormEvent } from "react";
-import type { Conversation, DocumentInfo, IngestResponse } from "@/types";
+import type {
+  Conversation,
+  DocumentInfo,
+  IngestJob,
+  IngestResponse,
+} from "@/types";
 
 const ACCEPTED_TYPES = ".pdf,.txt,.md";
 
@@ -18,6 +23,7 @@ export default function DocumentPanel({
   uploading,
   error,
   lastIngest,
+  activeJob,
   onIngestFile,
   onIngestUrl,
   onDeleteDocument,
@@ -29,6 +35,7 @@ export default function DocumentPanel({
   uploading: boolean;
   error: string | null;
   lastIngest: IngestResponse | null;
+  activeJob: IngestJob | null;
   onIngestFile: (file: File) => Promise<IngestResponse>;
   onIngestUrl: (url: string) => Promise<IngestResponse>;
   onDeleteDocument: (id: string) => void;
@@ -42,6 +49,13 @@ export default function DocumentPanel({
   const handleFileChange = async (file: File | undefined) => {
     if (!file) return;
     setFileMessage(null);
+    // Client-side guard matching the backend's 10 MB cap — instant
+    // feedback instead of uploading just to get a 413.
+    if (file.size > 10 * 1024 * 1024) {
+      setFileMessage("File is too large (max 10 MB).");
+      if (fileInputRef.current) fileInputRef.current.value = "";
+      return;
+    }
     try {
       const result = await onIngestFile(file);
       setFileMessage(
@@ -97,7 +111,13 @@ export default function DocumentPanel({
             <path d="M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3" />
           </svg>
           <span className="text-sm font-medium text-mist-100">
-            {uploading ? "Uploading & chunking…" : "Drop a file or browse"}
+            {uploading
+              ? activeJob?.status === "processing"
+                ? `Processing… ${activeJob.progress}%`
+                : activeJob?.status === "queued"
+                  ? "Queued — waiting for the worker…"
+                  : "Uploading…"
+              : "Drop a file or browse"}
           </span>
           <span className="font-mono text-[11px] text-mist-600">
             PDF · TXT · Markdown
@@ -143,6 +163,50 @@ export default function DocumentPanel({
           <p className="mt-2 text-xs leading-relaxed text-success">{urlMessage}</p>
         )}
       </section>
+
+      {/* Live ingest job — the upload already returned (202), so this
+          is the background work: queued, then processing with progress. */}
+      {activeJob && activeJob.status !== "done" && (
+        <section className="rounded-card border border-white/[0.07] bg-ink-850/80 p-3.5 text-sm">
+          <div className="flex items-baseline justify-between gap-2">
+            <h3 className="font-display font-semibold text-mist-100">
+              {activeJob.status === "failed" ? "Ingest failed" : "Ingesting…"}
+            </h3>
+            <span className="font-mono text-[11px] text-mist-500">
+              {activeJob.status === "processing"
+                ? `${activeJob.progress}%`
+                : activeJob.status}
+            </span>
+          </div>
+          <p className="mt-1 truncate text-xs text-mist-500" title={activeJob.source}>
+            {activeJob.title}
+          </p>
+          {activeJob.status !== "failed" && (
+            <div
+              className="mt-2.5 h-1.5 overflow-hidden rounded-full bg-white/[0.08]"
+              role="progressbar"
+              aria-valuenow={activeJob.progress}
+              aria-valuemin={0}
+              aria-valuemax={100}
+            >
+              <div
+                className="h-full rounded-full bg-accent-500 transition-[width] duration-500"
+                style={{ width: `${activeJob.progress}%` }}
+              />
+            </div>
+          )}
+          {activeJob.total_chunks > 0 && (
+            <p className="mt-1.5 font-mono text-[11px] text-mist-600">
+              {activeJob.done_chunks} / {activeJob.total_chunks} chunks
+            </p>
+          )}
+          {activeJob.status === "failed" && activeJob.error && (
+            <p className="mt-1.5 text-xs leading-relaxed text-danger">
+              {activeJob.error}
+            </p>
+          )}
+        </section>
+      )}
 
       {/* Last ingest stats */}
       {lastIngest && (
