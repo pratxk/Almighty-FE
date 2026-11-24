@@ -1,5 +1,9 @@
 "use client";
 
+import { useCallback, useState } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import type { Components } from "react-markdown";
 import ConfidenceBadge from "@/components/ConfidenceBadge";
 import type { ChatMessageData, TraceStep } from "@/types";
 
@@ -63,13 +67,154 @@ export function AgentOrb({ size = "md" }: { size?: "sm" | "md" }) {
 }
 
 /**
+ * Turn bare [1], [2] citations in the answer into links to the matching
+ * source card. Code spans and fenced code blocks are left untouched, so
+ * things like array indexes in code never become citation chips.
+ */
+function linkCitations(text: string): string {
+  const parts = text.split(/(```[\s\S]*?```|`[^`\n]+`)/g);
+  return parts
+    .map((part, i) =>
+      i % 2 === 0
+        ? part.replace(/\[(\d{1,2})\]/g, "[$1](#source-$1)")
+        : part
+    )
+    .join("");
+}
+
+/**
+ * The answer, rendered as real Markdown — headings, lists, bold, code
+ * blocks — instead of raw text where `**` and `*` show up literally.
+ * Citation links ([n]) become tappable chips that open the source list
+ * and highlight the matching card.
+ */
+function MarkdownAnswer({
+  content,
+  onCite,
+}: {
+  content: string;
+  onCite: (n: number) => void;
+}) {
+  const components: Components = {
+    p: ({ children }) => (
+      <p className="mb-3 text-[15px] leading-7 text-mist-100 last:mb-0">
+        {children}
+      </p>
+    ),
+    h1: ({ children }) => (
+      <h1 className="mb-2 mt-5 text-lg font-semibold leading-8 text-white first:mt-0">
+        {children}
+      </h1>
+    ),
+    h2: ({ children }) => (
+      <h2 className="mb-2 mt-5 text-[17px] font-semibold leading-8 text-white first:mt-0">
+        {children}
+      </h2>
+    ),
+    h3: ({ children }) => (
+      <h3 className="mb-1.5 mt-4 text-[15px] font-semibold leading-7 text-white first:mt-0">
+        {children}
+      </h3>
+    ),
+    ul: ({ children }) => (
+      <ul className="mb-3 list-disc space-y-1.5 pl-5 marker:text-mist-500 last:mb-0">
+        {children}
+      </ul>
+    ),
+    ol: ({ children }) => (
+      <ol className="mb-3 list-decimal space-y-1.5 pl-5 marker:font-medium marker:text-mist-400 last:mb-0">
+        {children}
+      </ol>
+    ),
+    li: ({ children }) => (
+      <li className="text-[15px] leading-7 text-mist-100">{children}</li>
+    ),
+    strong: ({ children }) => (
+      <strong className="font-semibold text-white">{children}</strong>
+    ),
+    em: ({ children }) => <em className="italic">{children}</em>,
+    a: ({ href, children }) => {
+      const cite = href ? /^#source-(\d+)$/.exec(href) : null;
+      if (cite) {
+        const n = Number(cite[1]);
+        return (
+          <button
+            type="button"
+            onClick={() => onCite(n)}
+            title={`Show source ${n}`}
+            className="mx-0.5 inline-flex -translate-y-[1px] items-center rounded-md bg-accent-500/15 px-1.5 py-px font-mono text-[11px] font-semibold text-accent-300 transition hover:bg-accent-500/30"
+          >
+            {children}
+          </button>
+        );
+      }
+      return (
+        <a
+          href={href}
+          target="_blank"
+          rel="noreferrer"
+          className="text-accent-300 underline decoration-accent-500/40 underline-offset-2 hover:text-accent-200"
+        >
+          {children}
+        </a>
+      );
+    },
+    code: ({ className, children }) => {
+      // Fenced blocks carry a language-xxx class and are styled by `pre`
+      // below; only inline code gets the pill styling here.
+      if (className?.includes("language-")) {
+        return <code className={className}>{children}</code>;
+      }
+      return (
+        <code className="rounded-md bg-white/10 px-1.5 py-0.5 font-mono text-[13px] text-mist-100">
+          {children}
+        </code>
+      );
+    },
+    pre: ({ children }) => (
+      <pre className="mb-3 overflow-x-auto rounded-xl border border-white/[0.07] bg-black/40 p-3.5 font-mono text-[13px] leading-6 text-mist-100 last:mb-0">
+        {children}
+      </pre>
+    ),
+    blockquote: ({ children }) => (
+      <blockquote className="mb-3 border-l-2 border-accent-500/50 pl-3 text-mist-300 last:mb-0">
+        {children}
+      </blockquote>
+    ),
+    table: ({ children }) => (
+      <div className="mb-3 overflow-x-auto last:mb-0">
+        <table className="w-full border-collapse text-sm">{children}</table>
+      </div>
+    ),
+    th: ({ children }) => (
+      <th className="border-b border-white/15 px-2.5 py-1.5 text-left font-semibold text-white">
+        {children}
+      </th>
+    ),
+    td: ({ children }) => (
+      <td className="border-b border-white/[0.07] px-2.5 py-1.5 align-top text-mist-100">
+        {children}
+      </td>
+    ),
+    hr: () => <hr className="my-4 border-white/10" />,
+  };
+  return (
+    <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
+      {linkCitations(content)}
+    </ReactMarkdown>
+  );
+}
+
+/**
  * One chat message.
  *
  * User messages are a violet bubble. Assistant messages are an answer card:
- * identity header (orb, name, confidence, route), the answer itself,
- * citation source cards with relevance bars, and a live step strip that
- * lights up while the run streams. The graph / trace / transparency detail
- * lives in the right-hand inspector — this card links to it via Inspect.
+ * identity header (orb, name, confidence, route), the answer itself rendered
+ * as Markdown, a collapsed-by-default Sources section (tap to expand, and
+ * tapping a [n] citation chip opens it on that source), and a live step
+ * strip that lights up while the run streams. The graph / trace /
+ * transparency detail lives in the right-hand inspector — this card links
+ * to it via Inspect.
  */
 export default function ChatMessage({
   message,
@@ -80,6 +225,22 @@ export default function ChatMessage({
   selected?: boolean;
   onInspect?: (id: string) => void;
 }) {
+  const [sourcesOpen, setSourcesOpen] = useState(false);
+  const [highlightedSource, setHighlightedSource] = useState<number | null>(
+    null
+  );
+
+  /** Open the sources list on card `n` and scroll it into view. */
+  const openSource = useCallback((n: number) => {
+    setSourcesOpen(true);
+    setHighlightedSource(n);
+    window.setTimeout(() => {
+      document
+        .getElementById(`source-${n}`)
+        ?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }, 60);
+  }, []);
+
   if (message.role === "user") {
     return (
       <div className="animate-fade-up flex justify-end">
@@ -201,76 +362,108 @@ export default function ChatMessage({
           </p>
         </div>
       ) : (
-        <p className="mt-3 whitespace-pre-wrap text-[15px] leading-7 text-mist-100">
-          {message.content}
+        <div className="mt-3">
+          <MarkdownAnswer content={message.content} onCite={openSource} />
           {streaming && (
             <span className="caret-blink ml-0.5 inline-block h-[15px] w-[2px] translate-y-[2px] bg-accent-400" />
           )}
-        </p>
+        </div>
       )}
 
-      {/* Sources */}
+      {/* Sources — collapsed by default; tap the header to expand, or tap
+          a [n] citation chip in the answer to open it on that source. */}
       {sources.length > 0 && (
         <div className="mt-5">
-          <h4 className="font-mono text-[11px] font-semibold uppercase tracking-[0.14em] text-mist-600">
+          <button
+            type="button"
+            onClick={() => setSourcesOpen((o) => !o)}
+            aria-expanded={sourcesOpen}
+            className="flex w-full items-center gap-2 font-mono text-[11px] font-semibold uppercase tracking-[0.14em] text-mist-500 transition hover:text-mist-300"
+          >
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              className={`h-3.5 w-3.5 transition-transform ${
+                sourcesOpen ? "rotate-90" : ""
+              }`}
+              aria-hidden
+            >
+              <path
+                d="M9 5.5 15.5 12 9 18.5"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
             Sources · {sources.length}
-          </h4>
-          <ul className="mt-2.5 space-y-2">
-            {sources.map((s, i) => (
-              <li
-                key={`${s.source}-${i}`}
-                className="rounded-xl border border-white/[0.07] bg-white/[0.02] p-3 transition hover:border-white/[0.14]"
-              >
-                <div className="flex items-baseline gap-2">
-                  <span className="shrink-0 rounded-md bg-accent-500/15 px-1.5 py-0.5 font-mono text-[11px] font-semibold text-accent-300">
-                    [{i + 1}]
-                  </span>
-                  {s.source_type === "web" && (
-                    <span
-                      className="shrink-0 rounded-md bg-sky-500/15 px-1.5 py-0.5 font-mono text-[10px] font-semibold uppercase tracking-wide text-sky-300"
-                      title={`Web source: ${s.source}`}
-                    >
-                      Web
+            <span className="ml-auto font-sans normal-case tracking-normal text-mist-600">
+              {sourcesOpen ? "hide" : "show"}
+            </span>
+          </button>
+          {sourcesOpen && (
+            <ul className="mt-2.5 space-y-2">
+              {sources.map((s, i) => (
+                <li
+                  key={`${s.source}-${i}`}
+                  id={`source-${i + 1}`}
+                  className={`scroll-mt-3 rounded-xl border p-3 transition ${
+                    highlightedSource === i + 1
+                      ? "border-accent-500/60 bg-accent-500/[0.07] ring-1 ring-accent-500/40"
+                      : "border-white/[0.07] bg-white/[0.02] hover:border-white/[0.14]"
+                  }`}
+                >
+                  <div className="flex items-baseline gap-2">
+                    <span className="shrink-0 rounded-md bg-accent-500/15 px-1.5 py-0.5 font-mono text-[11px] font-semibold text-accent-300">
+                      [{i + 1}]
                     </span>
-                  )}
-                  {isExternal(s.source) ? (
-                    <a
-                      href={s.source}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="min-w-0 truncate text-sm font-medium text-mist-100 hover:text-accent-300 hover:underline"
-                    >
-                      {s.title}
-                    </a>
-                  ) : (
-                    <span
-                      className="min-w-0 truncate text-sm font-medium text-mist-100"
-                      title={s.source}
-                    >
-                      {s.title}
-                    </span>
-                  )}
-                  <span className="ml-auto flex shrink-0 items-center gap-2">
-                    <span
-                      className="h-1 w-14 overflow-hidden rounded-full bg-white/10"
-                      title={`Relevance ${s.score.toFixed(2)}`}
-                    >
+                    {s.source_type === "web" && (
                       <span
-                        className="block h-full rounded-full bg-gradient-to-r from-accent-500 to-success"
-                        style={{ width: `${Math.round(s.score * 100)}%` }}
-                      />
+                        className="shrink-0 rounded-md bg-sky-500/15 px-1.5 py-0.5 font-mono text-[10px] font-semibold uppercase tracking-wide text-sky-300"
+                        title={`Web source: ${s.source}`}
+                      >
+                        Web
+                      </span>
+                    )}
+                    {isExternal(s.source) ? (
+                      <a
+                        href={s.source}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="min-w-0 truncate text-sm font-medium text-mist-100 hover:text-accent-300 hover:underline"
+                      >
+                        {s.title}
+                      </a>
+                    ) : (
+                      <span
+                        className="min-w-0 truncate text-sm font-medium text-mist-100"
+                        title={s.source}
+                      >
+                        {s.title}
+                      </span>
+                    )}
+                    <span className="ml-auto flex shrink-0 items-center gap-2">
+                      <span
+                        className="h-1 w-14 overflow-hidden rounded-full bg-white/10"
+                        title={`Relevance ${s.score.toFixed(2)}`}
+                      >
+                        <span
+                          className="block h-full rounded-full bg-gradient-to-r from-accent-500 to-success"
+                          style={{ width: `${Math.round(s.score * 100)}%` }}
+                        />
+                      </span>
+                      <span className="font-mono text-[11px] text-mist-500">
+                        {s.score.toFixed(2)}
+                      </span>
                     </span>
-                    <span className="font-mono text-[11px] text-mist-500">
-                      {s.score.toFixed(2)}
-                    </span>
-                  </span>
-                </div>
-                <p className="mt-1.5 line-clamp-3 text-sm leading-relaxed text-mist-500">
-                  {s.snippet}
-                </p>
-              </li>
-            ))}
-          </ul>
+                  </div>
+                  <p className="mt-1.5 line-clamp-3 text-sm leading-relaxed text-mist-500">
+                    {s.snippet}
+                  </p>
+                </li>
+              ))}
+            </ul>
+          )}
         </div>
       )}
     </article>
