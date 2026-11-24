@@ -49,6 +49,13 @@ export default function DocumentPanel({
   const handleFileChange = async (file: File | undefined) => {
     if (!file) return;
     setFileMessage(null);
+    // Client-side guard matching the backend's 10 MB cap — instant
+    // feedback instead of uploading just to get a 413.
+    if (file.size > 10 * 1024 * 1024) {
+      setFileMessage("File is too large (max 10 MB).");
+      if (fileInputRef.current) fileInputRef.current.value = "";
+      return;
+    }
     try {
       const result = await onIngestFile(file);
       setFileMessage(
